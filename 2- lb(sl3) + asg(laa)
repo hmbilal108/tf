@@ -1,0 +1,296 @@
+
+terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "5.74.0"
+    }
+  }
+}
+
+
+
+# Configuration options
+provider "aws" {
+  region     = "ap-south-1"
+  access_key = "paste your access key here"
+  secret_key = "paste your secret key here"
+}
+
+
+
+# VPC
+resource "aws_vpc" "my_vpc" {
+  cidr_block           = "10.0.0.0/16"
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+
+  tags = {
+    Name = "MyVPC"
+  }
+}
+
+# Public Subnets
+# Public Subnet 1 in AZ1
+resource "aws_subnet" "public_subnet_1_az_1" {
+  vpc_id                  = aws_vpc.my_vpc.id
+  cidr_block              = "10.0.3.0/24"  # Updated CIDR to avoid conflict
+  map_public_ip_on_launch = true
+  availability_zone       = "ap-south-1a"
+
+  tags = {
+    Name = "PublicSubnetA_AZ1"
+  }
+}
+
+# Public Subnet 2 in AZ2
+resource "aws_subnet" "public_subnet_2_az_2" {
+  vpc_id                  = aws_vpc.my_vpc.id
+  cidr_block              = "10.0.2.0/24"
+  map_public_ip_on_launch = true
+  availability_zone       = "ap-south-1b"
+
+  tags = {
+    Name = "PublicSubnetB_AZ2"
+  }
+}
+
+
+# Internet Gateway
+resource "aws_internet_gateway" "my_igw" {
+  vpc_id = aws_vpc.my_vpc.id
+
+  tags = {
+    Name = "MyIGW"
+  }
+}
+
+# Route Table for Public Subnet
+resource "aws_route_table" "my_public_rt" {
+  vpc_id = aws_vpc.my_vpc.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.my_igw.id
+  }
+
+  tags = {
+    Name = "MyPublicRouteTable"
+  }
+}
+
+# Associate Route Table with Public Subnets
+resource "aws_route_table_association" "public_rt_assoc_1" {
+  subnet_id      = aws_subnet.public_subnet_1_az_1.id
+  route_table_id = aws_route_table.my_public_rt.id
+}
+
+resource "aws_route_table_association" "public_rt_assoc_2" {
+  subnet_id      = aws_subnet.public_subnet_2_az_2.id
+  route_table_id = aws_route_table.my_public_rt.id
+}
+
+# Security Group for EC2 Instances
+resource "aws_security_group" "instance_sg" {
+  vpc_id      = aws_vpc.my_vpc.id
+  description = "Allow HTTP and SSH"
+
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "InstanceSecurityGroup"
+  }
+}
+
+# Security Group for Load Balancer
+resource "aws_security_group" "lb_sg" {
+  vpc_id      = aws_vpc.my_vpc.id
+  description = "Allow HTTP"
+
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "LoadBalancerSecurityGroup"
+  }
+}
+
+# Load Balancer
+resource "aws_lb" "my_lb" {
+  name               = "my-load-balancer"
+  internal           = false
+  load_balancer_type = "application"
+  security_groups    = [aws_security_group.lb_sg.id]
+  subnets            = [aws_subnet.public_subnet_1_az_1.id, aws_subnet.public_subnet_2_az_2.id]
+
+  enable_deletion_protection = false
+
+  tags = {
+    Name = "MyLoadBalancer"
+  }
+}
+
+# Target Group for Load Balancer
+resource "aws_lb_target_group" "my_target_group" {
+  name     = "my-target-group"
+  port     = 80
+  protocol = "HTTP"
+  vpc_id   = aws_vpc.my_vpc.id
+
+  health_check {
+    path                = "/"
+    interval            = 30
+    timeout             = 5
+    unhealthy_threshold = 2
+    healthy_threshold   = 5
+  }
+
+  tags = {
+    Name = "MyTargetGroup"
+  }
+}
+
+# Load Balancer Listener
+resource "aws_lb_listener" "my_listener" {
+  load_balancer_arn = aws_lb.my_lb.arn
+  port              = 80
+  protocol          = "HTTP"
+
+  default_action {
+    type             = "forward"
+    target_group_arn = aws_lb_target_group.my_target_group.arn
+  }
+}
+
+# Launch Template for EC2 Instances
+resource "aws_launch_template" "my_launch_template" {
+  name_prefix   = "my-launch-template"
+  image_id      = "ami-0dee22c13ea7a9a67"
+  instance_type = "t2.micro"
+
+  network_interfaces {
+    associate_public_ip_address = true
+    security_groups             = [aws_security_group.instance_sg.id]
+  }
+
+  user_data = base64encode(<<EOF
+#!/bin/bash
+
+# Update the package list and install Apache
+sudo apt-get update -y
+sudo apt-get install -y apache2
+
+# Ensure Apache is enabled and started
+sudo systemctl enable apache2
+sudo systemctl start apache2
+
+# Fetch instance metadata using IMDSv2 (Instance Metadata Service Version 2)
+TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id)
+AVAILABILITY_ZONE=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/availability-zone)
+
+# Verify values
+echo $INSTANCE_ID
+echo $AVAILABILITY_ZONE
+
+# Create an HTML page to display the instance information
+echo "<html><body><h1>EC2 Instance Information</h1><p><strong>Instance ID:</strong> $INSTANCE_ID</p><p><strong>Availability Zone:</strong> $AVAILABILITY_ZONE</p></body></html>" | sudo tee /var/www/html/index.html
+EOF
+  )
+
+ 
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+
+
+
+
+
+# Auto Scaling Group
+resource "aws_autoscaling_group" "my_asg" {
+  desired_capacity     = 2
+  max_size             = 4
+  min_size             = 1
+  vpc_zone_identifier  = [aws_subnet.public_subnet_1_az_1.id, aws_subnet.public_subnet_2_az_2.id]
+  target_group_arns    = [aws_lb_target_group.my_target_group.arn]
+
+  launch_template {
+    id      = aws_launch_template.my_launch_template.id
+    version = "$Latest"
+  }
+
+  health_check_type          = "EC2"
+  health_check_grace_period = 300
+
+  tag {
+    key                 = "Name"
+    value               = "AutoScalingInstance"
+    propagate_at_launch = true
+  }
+
+  force_delete = true
+}
+
+# Scaling Policies for Auto Scaling Group
+resource "aws_autoscaling_policy" "scale_up" {
+  name                    = "scale-up-policy"
+  scaling_adjustment       = 1
+  adjustment_type          = "ChangeInCapacity"
+  cooldown                 = 300
+  policy_type              = "SimpleScaling"
+  autoscaling_group_name   = aws_autoscaling_group.my_asg.name
+}
+
+resource "aws_autoscaling_policy" "scale_down" {
+  name                    = "scale-down-policy"
+  scaling_adjustment       = -1
+  adjustment_type          = "ChangeInCapacity"
+  cooldown                 = 300
+  policy_type              = "SimpleScaling"
+  autoscaling_group_name   = aws_autoscaling_group.my_asg.name
+}
+
+# Output Load Balancer DNS
+output "load_balancer_dns" {
+  value = aws_lb.my_lb.dns_name
+}
+
+
+
+
+
+
