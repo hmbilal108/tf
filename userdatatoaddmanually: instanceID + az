@@ -1,0 +1,61 @@
+#!/bin/bash
+
+# Update the package list and install Apache
+sudo apt-get update -y
+sudo apt-get install -y apache2
+
+# Ensure Apache is enabled and started
+sudo systemctl enable apache2
+sudo systemctl start apache2
+
+# Fetch instance metadata using IMDSv2 (Instance Metadata Service Version 2)
+TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id)
+AVAILABILITY_ZONE=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/availability-zone)
+
+# Verify values (logging to the console)
+echo $INSTANCE_ID
+echo $AVAILABILITY_ZONE
+
+# Create an HTML page to display the instance information
+echo "<html>
+<head>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      text-align: center;
+      margin: 0;
+      padding: 20px;
+      background-color: #f4f4f4;
+    }
+    h1 {
+      font-size: 36px;
+      color: #333;
+      margin-bottom: 20px;
+    }
+    p {
+      font-size: 24px;
+      color: #555;
+    }
+    .bold {
+      font-weight: bold;
+      color: #2a2a2a;
+    }
+    .container {
+      background-color: #ffffff;
+      padding: 20px;
+      border-radius: 10px;
+      box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+      display: inline-block;
+      margin-top: 50px;
+    }
+  </style>
+</head>
+<body>
+  <div class='container'>
+    <h1>EC2 Instance Information</h1>
+    <p><span class='bold'>Instance ID:</span> $INSTANCE_ID</p>
+    <p><span class='bold'>Availability Zone:</span> $AVAILABILITY_ZONE</p>
+  </div>
+</body>
+</html>" | sudo tee /var/www/html/index.html
