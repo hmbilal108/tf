@@ -19,3 +19,54 @@ echo $AVAILABILITY_ZONE
 
 # Create an HTML page to display the instance information
 echo "<html><body><h1>EC2 Instance Information</h1><p><strong>Instance ID:</strong> $INSTANCE_ID</p><p><strong>Availability Zone:</strong> $AVAILABILITY_ZONE</p></body></html>" | sudo tee /var/www/html/index.html
+
+
+
+
+
+
+
+
+
+
+===================================================================================
+at center upper  (only paste in ec2 userdata manually)
+===================================================================================
+
+#!/bin/bash
+
+# Update the package list and install Apache
+sudo apt-get update -y
+sudo apt-get install -y apache2
+
+# Ensure Apache is enabled and started
+sudo systemctl enable apache2
+sudo systemctl start apache2
+
+# Fetch instance metadata using IMDSv2 (Instance Metadata Service Version 2)
+TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id)
+AVAILABILITY_ZONE=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/availability-zone)
+
+# Verify values
+echo $INSTANCE_ID
+echo $AVAILABILITY_ZONE
+
+# Create an HTML page to display the instance information
+echo "<html>
+<head>
+  <style>
+    body { text-align: center; }
+    h1 { font-size: 24px; }
+    p { font-size: 20px; }
+    .bold { font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>EC2 Instance Information</h1>
+  <p><span class='bold'>Instance ID:</span> $INSTANCE_ID</p>
+  <p><span class='bold'>Availability Zone:</span> $AVAILABILITY_ZONE</p>
+</body>
+</html>" | sudo tee /var/www/html/index.html
+
+
